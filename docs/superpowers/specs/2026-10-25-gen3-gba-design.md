@@ -226,10 +226,12 @@ the Gen III-only ones:
 
 ## Decisions made by the user
 
-- Real hardware: a GBA, a GBA link cable, and the **Flipper GB Link board**
-  (KBEmbedded). That means the Original pinout: SI PC3, SO PB3, CLK PB2, SD PA4.
-  The board's listing says its connector takes GBA-style cables, so no adapter
-  is expected; the first hardware test confirms it.
+- Real hardware: a GBA, a GBA link cable, and KBEmbedded's
+  [Game Link GPIO module](https://www.tindie.com/products/kbembedded/game-link-gpio-module-for-flipper-zero-game-boy/)
+  (the "Flipper GB Link board"). That means the Original pinout: SI PC3, SO PB3,
+  CLK PB2, SD PA4. The listing says its connector takes both GBC- and GBA-style
+  Game Link Cables, so no adapter is expected; the first hardware test confirms
+  it.
 - **Official Flipper firmware.** Hardware test builds come from the release
   SDK channel, which CI already builds.
 - Both phases; Cable Club trade first, direct save access second.
