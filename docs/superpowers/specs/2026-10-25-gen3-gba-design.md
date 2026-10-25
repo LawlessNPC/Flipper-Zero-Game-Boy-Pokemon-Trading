@@ -1,6 +1,6 @@
 # Gen III (Game Boy Advance) support — design
 
-Status: draft for review (2026-10-25)
+Status: ready for approval (2026-10-25)
 
 ## Intent
 
@@ -111,9 +111,11 @@ the Gen III-only ones:
   species received. Ruby never refuses non-Hoenn species. So the Flipper never
   sends the flag unless the user turns this on, and the save isn't permanently
   changed without asking.
-- Emerald, FireRed and LeafGreen trades after Ruby works. They're wanted, but
-  not required to ship Phase 1, and are only planned for if the user has those
-  cartridges to test with.
+- **FireRed and LeafGreen trades come next, after Ruby works.** The user owns
+  FireRed, so they're planned and tested. They aren't required to ship the
+  first Phase 1 release.
+- Emerald is not planned yet because the user has no cartridge to test with.
+  Nothing should rule it out.
 
 **Phase 2**
 
@@ -121,8 +123,9 @@ the Gen III-only ones:
 - Read and write the cartridge save safely: back up first, write, verify.
 - Edit the party and all 14 PC boxes in place. Put Pokemon in empty slots.
 - Restore the save from an SD backup, and copy the cartridge ROM to the SD card.
-- Ruby and Sapphire save layouts are required. Emerald and FireRed/LeafGreen
-  store data at different offsets; they follow on the same terms as in Phase 1.
+- Ruby and Sapphire save layouts are required. FireRed/LeafGreen store data at
+  different offsets and come next (the user owns FireRed). Emerald waits until
+  there's a cartridge to test with.
 - Only write to save types the helper program positively identifies (a known
   flash chip ID, or SRAM). Refuse to write anything else: reproduction carts
   that save into the ROM's own flash ("batteryless") could pass verification
@@ -223,9 +226,15 @@ the Gen III-only ones:
 
 ## Decisions made by the user
 
-- Real hardware: a GBA, a GBA link cable and the GPIO link board.
+- Real hardware: a GBA, a GBA link cable, and the **Flipper GB Link board**
+  (KBEmbedded). That means the Original pinout: SI PC3, SO PB3, CLK PB2, SD PA4.
+  The board's listing says its connector takes GBA-style cables, so no adapter
+  is expected; the first hardware test confirms it.
+- **Official Flipper firmware.** Hardware test builds come from the release
+  SDK channel, which CI already builds.
 - Both phases; Cable Club trade first, direct save access second.
-- Ruby is the main test game.
+- Test cartridges: a **genuine Ruby** (the main test game, with 128 KB flash
+  save) and **FireRed**.
 
 ## My calls (flagged for the user to check)
 
@@ -254,13 +263,6 @@ the Gen III-only ones:
    the `flipper-gblink` submodule.
 10. **Phase 2 only writes to save types it positively identifies.**
 
-## Waiting on the user
-
-- Which link board they use, whether the GBA cable plugs straight into it, and
-  which Flipper firmware they run.
-- Whether the Ruby cartridge is genuine, and which other Gen III cartridges
-  they own.
-
 ## Left to the builder
 
 - How the link driver meets the timing: timer capture/compare, DMA, interrupt
@@ -270,15 +272,16 @@ the Gen III-only ones:
 - Screen layouts, within the app's existing look and scene structure.
 - Which Gen III game version the Flipper claims to be during a trade, as long
   as Ruby accepts the trade and the Pokemon.
-- How Emerald and FireRed/LeafGreen differences (National Dex gating, version
-  checks) are handled once Ruby works.
+- How FireRed/LeafGreen differences (National Dex gating, version checks) are
+  handled once Ruby works.
 
 ## Risks to check early
 
 - Whether the Flipper can keep 115200-baud multiplayer timing reliably under
   FreeRTOS. Biggest risk; addressed by call #1.
-- Whether the user's board actually wires SD to PA4. The Original preset says
-  so; confirm on the hardware.
+- Whether the Flipper GB Link board actually wires SD to PA4 and takes the GBA
+  cable directly. The Original preset and the listing say so; confirm on the
+  hardware.
 - The link save handshake at the end of a trade has to complete correctly. If
   it can't, abort before the game starts saving.
 - Keeping the link alive in the background while the Flipper's UI, text entry
