@@ -37,6 +37,22 @@ For the user's goal, they repeat that once per party member. Trades are one
 Pokemon at a time, as in the real game. Ruby needs at least two Pokemon in the
 party to trade.
 
+**The GBA stays in the Trade Center while you edit** (my call; it matches the
+Gen I/II experience the user chose). Unlike a Game Boy, Ruby does not wait
+quietly when its partner goes silent: it drops to a link-error screen that
+only a power cycle clears. So the Gen III link keeps running in the background
+for the whole time the Flipper is in Gen III mode, through every editor
+screen, text entry and SD card write, not only while the Trade screen is open.
+After the Flipper's Pokemon changes, the trade menu refreshes the way the game
+requires: both sides leave the trade menu and sit back down, and the parties
+are exchanged again. Ending the session leaves the Cable Club cleanly from the
+GBA side before the link stops.
+
+Fallback if the background link can't hold its timing during Flipper UI work:
+leave and return. The GBA player walks out of the Cable Club, which closes the
+link cleanly, the user edits, and then they go back in. That's more steps on
+the GBA per trade, but the link only has to run during the Trade screen.
+
 ### Phase 2: direct save access
 
 1. Power on the GBA with the Ruby cartridge in while holding **Start + Select**.
@@ -89,8 +105,15 @@ the Gen III-only ones:
 - Save a Pokemon to the SD card and load it back, in PKHeX's `.pk3` format, so
   Pokemon can move between this app and PKHeX in both directions. This is my
   call and can follow just after the trade works.
+- **Unlock National Dex** option, off by default. Ruby unlocks its National Dex
+  when the partner's link data has a flag set (`lp_field_2` = `0x8000`,
+  checked in `sub_804BA64` in pokeruby's `trade.c`), not because of the
+  species received. Ruby never refuses non-Hoenn species. So the Flipper never
+  sends the flag unless the user turns this on, and the save isn't permanently
+  changed without asking.
 - Emerald, FireRed and LeafGreen trades after Ruby works. They're wanted, but
-  not required to ship Phase 1.
+  not required to ship Phase 1, and are only planned for if the user has those
+  cartridges to test with.
 
 **Phase 2**
 
@@ -98,6 +121,12 @@ the Gen III-only ones:
 - Read and write the cartridge save safely: back up first, write, verify.
 - Edit the party and all 14 PC boxes in place. Put Pokemon in empty slots.
 - Restore the save from an SD backup, and copy the cartridge ROM to the SD card.
+- Ruby and Sapphire save layouts are required. Emerald and FireRed/LeafGreen
+  store data at different offsets; they follow on the same terms as in Phase 1.
+- Only write to save types the helper program positively identifies (a known
+  flash chip ID, or SRAM). Refuse to write anything else: reproduction carts
+  that save into the ROM's own flash ("batteryless") could pass verification
+  and then be silently overwritten at the next boot.
 
 **Always**
 
@@ -125,6 +154,8 @@ the Gen III-only ones:
   load cleanly in-game: no "Bad Egg", no checksum failures, no garbled data.
   The end of a trade must not leave the game stuck mid-save.
 - **Writing to a cartridge without a verified backup on the SD card** (Phase 2).
+- **Dropping the GBA to a link-error screen during normal use**, such as while
+  editing or saving on the Flipper. That forces the player to power-cycle.
 - **Breaking Gen I/II** for the people already using the app.
 
 ## Constraints
@@ -144,7 +175,10 @@ the Gen III-only ones:
   | MALVEKE EXT1 (MALVEKE 2.5 and older) | PA6 | PA7 | PB3 | PA4 |
 
   The app's Pinout screen only shows SI, SO and CLK, and the saved Custom
-  pinout doesn't store SD. Both need SD added.
+  pinout doesn't store SD. Both need SD added. The pinout file is written by
+  the `flipper-gblink` submodule, which belongs to the upstream maintainer, so
+  this app stores the SD choice in its own config instead of changing the
+  submodule (my call).
 - `flipper-gblink` only does byte-wide Game Boy Color transfers, so the GBA link
   needs new link code. It lives in this repo (my call). It could be offered to
   `flipper-gblink` later.
@@ -182,6 +216,10 @@ the Gen III-only ones:
   steps are handed to the user to run, with a clear checklist.
 - Commits are authored by the user (LawlessNPC, Aleksandr Kofman) with no
   AI-attribution trailers.
+- Pull requests go to the user's fork, `LawlessNPC/Flipper-Zero-Game-Boy-Pokemon-Trading`
+  (my call). Offering the work upstream to kbembedded is the user's choice
+  later. Phase 1 ships as version 3.0 in `application.fam`, Phase 2 as 3.x (my
+  call).
 
 ## Decisions made by the user
 
@@ -207,7 +245,21 @@ the Gen III-only ones:
 5. **The helper program's source lives in the repo**, built with a GBA
    toolchain (devkitARM or arm-none-eabi). The built binary is committed into
    `files/` so building the Flipper app never needs the GBA toolchain.
-6. **Each phase ships as its own pull request and release.**
+6. **Each phase ships as its own pull request and release**, targeting the
+   user's fork. Phase 1 is v3.0.
+7. **The GBA stays seated in the Trade Center while you edit**, with
+   leave-and-return as the fallback.
+8. **National Dex unlock is opt-in**, off by default.
+9. **The SD pin choice is stored in this app's own config**, not by changing
+   the `flipper-gblink` submodule.
+10. **Phase 2 only writes to save types it positively identifies.**
+
+## Waiting on the user
+
+- Which link board they use, whether the GBA cable plugs straight into it, and
+  which Flipper firmware they run.
+- Whether the Ruby cartridge is genuine, and which other Gen III cartridges
+  they own.
 
 ## Left to the builder
 
@@ -229,5 +281,6 @@ the Gen III-only ones:
   so; confirm on the hardware.
 - The link save handshake at the end of a trade has to complete correctly. If
   it can't, abort before the game starts saving.
-- Ruby's handling of non-Hoenn species received in a trade. Sources say it
-  unlocks the National Dex rather than blocking it; confirm in pokeruby.
+- Keeping the link alive in the background while the Flipper's UI, text entry
+  and SD card writes run. If it can't be done, use the leave-and-return
+  fallback.
