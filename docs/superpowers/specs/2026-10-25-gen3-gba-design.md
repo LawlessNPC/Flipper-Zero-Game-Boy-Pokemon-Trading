@@ -193,7 +193,7 @@ the Gen III-only ones:
   the shared SD line. The parent paces transfers about every 0.75 ms (timer 3,
   reload 65339, 64-cycle prescaler).
 - Game-level messages are 8 words plus a checksum word: handshake, player info
-  exchange, held keys (`0x4444`), block transfers (`0xBBBB` / `0x8888`), and
+  exchange, held key codes in the Trade Center (`0xCAFE`), block transfers (`0xBBBB` / `0x8888`), and
   so on.
 - In the Trade Center both players have avatars in the room, so the Flipper
   has to act as a player who is seated at the table, not just a data source.
