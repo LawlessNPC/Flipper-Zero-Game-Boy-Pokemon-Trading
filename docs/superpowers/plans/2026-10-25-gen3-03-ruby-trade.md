@@ -1241,13 +1241,14 @@ The tasks above are kept as written. The controller's rulings amended them while
 **Size, ISR and stack**
 - **New Task 0 (R1):** the move and item names and their sorted-id lists moved from flash to the SD bulk asset (`gen3_bulk.bin` format v2), which saved about 11 KB. The letter lists now read the SD card (checklist E.2a times them).
 - **Size budget:** `text + data` ≤ 112,000 for both builds, and dev ≤ 108,500 at every plan 3 commit. This replaces "+16,000 over the Task 1 baseline, ≤ 128,000". Measure the build directories (`~/.ufbt/build/pokemon_d.elf` and the dev SDK's), not `dist/`, which both builds write.
-- **Final figures** (Task 14): release 87,624 and dev 97,580. That is +480 and +2,024 since plan 3 started (87,144 / 95,556), and +11,592 and +12,976 since Task 0 (76,032 / 84,604).
+- **Final figures** (Task 14): release 87,624 and dev 97,580; after the final review's fixes, release 87,712 and dev 97,716. That is +480 and +2,024 since plan 3 started (87,144 / 95,556), and +11,592 and +12,976 since Task 0 (76,032 / 84,604).
 - **ISR (R2):** the decrypt scratch and the round-block buffer are `Gen3Club` fields, never locals. A `gen3_club_frame` call copies at most 600 B (not 220) and decrypts at most once. The deepest chain from `mlink_hw_isr`, plus 16 B for the TIM2 dispatch, must be ≤ 600 B by `-fstack-usage`. Task 14 measured 432 B in release (the AABB path down to `gen3_pkm_decrypt`) and 392 B in dev, the same as Task 11. With SysTick (72 B) beneath it and a 32-B exception frame, that is about 536 B of the 1,024-B ISR stack.
 - **App ↔ ISR:** each PRIMASK section copies at most 104 B (one Pokemon plus scalars), not 100. `Gen3ClubStatus` is never a stack local; app code reads it through `gen3_menu_status`, which copies it into one static buffer.
 
 **Interfaces**
 - Plan 2's real names replaced the ones written here: `gen3_*_name_get`, the bool `gen3_edit_*` setters, `gen3_edit_load`, `Gen3ImportInfo`, and `tests/bulk_file.h`.
 - `Gen3ClubConfig` gained `trading`; every initializer names all five fields.
+- The exported Gen III scene helpers are named `gen3_<scene>_...` after their scene: `gen3_trade_tick`, `gen3_trade_begin_edit` (in `pokemon_app.h`), `gen3_trade_end_decide`, `gen3_trade_end_open` and `gen3_result_set` (in `pokemon_gen3_menu.h`, the Gen III scenes' shared header).
 - `gen3_menu_editor_ready` is exported (R3), so `Trade`, `Edit Pokemon` and `Load .pk3` open the bulk file and create the editor before the tick runs.
 
 **Editing and offers**
@@ -1260,7 +1261,7 @@ The tasks above are kept as written. The controller's rulings amended them while
 - **Own link type (D2):** 0x1133 when not trading; 0x1144 mirrored only while a trade is pending; 0x1111 only after the Flipper's EEBB.
 
 **Save safety**
-- `Assumed` needs the sync-2 answer to have reached the GBA: a burst with no timeout, framing or checksum error, and an empty queue. Otherwise a link loss after sync 2 gives `RolledBack`.
+- `Assumed` needs the sync-2 answer to have reached the GBA: a whole burst (no timeout) without a checksum error, and an empty queue. Otherwise a link loss after sync 2 gives `RolledBack`. A stop-bit error alone doesn't hold the answer back: when unsure, `Assumed` (at worst a clone of the Flipper's offer, which can be made again) is safer than `RolledBack` (at worst the GBA's traded Pokemon lost on both sides).
 - A pending trade is cancelled on a 0x1122-session link loss unless that session's 5FFF close was answered.
 - Only a filed GBA block restarts the 6-burst reply delay. An incomplete block is dropped after 6 silent bursts. The 6 idle bursts between rounds 2–5 stay as a margin that pokeruby doesn't need.
 
@@ -1269,6 +1270,9 @@ The tasks above are kept as written. The controller's rulings amended them while
 - `left` is not set for a close that reopens for a relink; a 300-frame timeout covers a GBA that never relinks. `left` can come with a trade still pending, and the UI never reads it as "trade resolved".
 - No stop frees the club before the sync has every received Pokemon. With a pickup waiting for the SD card, `End trade` offers `Retry` or `End anyway`.
 - Every dialog button decides again from a fresh status when pressed.
+- `left` is sticky. Once it is set the club never sits again in that session, so a GBA that walks back into the Trade Center can't start a trade. The tick ends a left session only when it is settled, no GBA is linked (Waiting, not relinking) and R6 allows it.
+- A trade whose link was lost in the GBA's save shows its outcome (`RolledBack` or `Assumed`) ahead of `Link ended`, also after `End trade` during that trade.
+- `Trade` in the Gen III menu opens a running session's trade screen without needing the data file; a new session still needs it.
 - Task 14: the trade screen reads a relink's gap as linked too (`Linking...`), so `Go to the Cable Club` no longer flashes up for about 20 frames at each relink.
 
 **Docs and the hardware gate**

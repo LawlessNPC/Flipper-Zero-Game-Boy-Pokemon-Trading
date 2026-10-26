@@ -524,7 +524,7 @@ TEST(test_edit_set_fateful)       /* init; set_species(151): Fateful 1; set_fate
 - Create: `docs/gen3/hardware-test-frlg.md`
 
 **Interfaces:**
-- Consumes: Tasks 3 and 5; plan 3's tick (`pokemon_gen3_trade_tick`) and `Gen3NatDex` dialog.
+- Consumes: Tasks 3 and 5; plan 3's tick (`gen3_trade_tick`) and `Gen3NatDex` dialog.
 - Produces:
   ```c
   /* Replaces plan 3's gen3_session_set_offer (delete it; the tick was its only caller).
