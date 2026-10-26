@@ -667,3 +667,15 @@ The callback runs with interrupts enabled. Copy `next` into a driver-owned buffe
   
   Fix, rebuild, and retest only the failing steps.
 - [ ] **Step 4:** If the timing can't be held reliably, stop and report to the user with the logs. Per spec call #1, the fallback is to do plan 5 (direct save access) first.
+
+## Amendments made during execution
+
+The tasks above are kept as written. These changes were made while executing them; the code is the reference.
+
+- **Burst gap:** the transfer tick is ≈1073 µs start-to-start (`MLINK_TIM_ARR` 68671, `MLINK_TICK_DECI_US` 10730 in `src/gen3/mlink_hw_furi.c`, not ARR 48095 / +7515), so with a ≈321.5 µs transfer the gap from the end of one transfer to the start of the next is 751.5 µs, matching the GBA.
+- **SD drive:** SD is driven push-pull for the Flipper's own word, start bit through stop bit, and released to input with pull-up otherwise (`MLINK_SD_PUSH_PULL` 1 in `mlink_hw_furi.c`; 0 restores the open-drain design).
+- **Cable check:** the cable line reads `Cable: OK` / `Cable: plug in/swap ends` (`src/views/gen3_link_test.c`), not `SWAP ENDS`. It stays live through a per-frame SI guard, with SI also latched on every idle tick, that skips transfers and releases SC/SO/SD (`mlink_hw_isr`, `mlink_lines_release`, `mlink_hw_cable_ok`).
+- **CAFE 0017:** it is answered only after the GBA's next command, because Ruby drops the key of the update right after its own 0x17 (pokeruby `overworld.c: sub_8054FF8`; `on_room_command` and `exit_answer_due` in `src/gen3/gen3_club.c`).
+- **Checksum errors:** they no longer flush the queue or enter Error. The error is counted (`Err`), the club sets `last_error` and keeps answering, and the link layer still delivers that burst's command (`burst_rx` in `src/gen3/gen3_link.c`, `Gen3LinkEventChecksumError` in `gen3_club_frame`). The club resets on Disconnected. So `error: checksum` is gone from the Link Test.
+- **Link Test lifecycle:** Stay or Back on the "Stop link?" dialog keeps the session running; only `Stop`, or Back outside the club phases, stops it (`src/scenes/pokemon_gen3_link_exit.c`, `pokemon_gen3_link_test.c`). The dialog says the GBA *may* show a link error.
+- **Driver additions:** insomnia while linked (`furi_hal_power_insomnia_enter` in `mlink_hw_start`, so TIM2 keeps running), and SC raised at +18 bits after the child's start edge, the end of its stop bit (`MLINK_RX_END_HALF` 36).
