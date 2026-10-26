@@ -1261,7 +1261,7 @@ The tasks above are kept as written. The controller's rulings amended them while
 - **Own link type (D2):** 0x1133 when not trading; 0x1144 mirrored only while a trade is pending; 0x1111 only after the Flipper's EEBB.
 
 **Save safety**
-- `Assumed` needs the sync-2 answer to have reached the GBA: a whole burst (no timeout) without a checksum error, and an empty queue. Otherwise a link loss after sync 2 gives `RolledBack`. A stop-bit error alone doesn't hold the answer back: when unsure, `Assumed` (at worst a clone of the Flipper's offer, which can be made again) is safer than `RolledBack` (at worst the GBA's traded Pokemon lost on both sides).
+- `Assumed` needs the sync-2 answer to have reached the GBA: a whole burst (no timeout) without a checksum error, and an empty queue. Otherwise a link loss after sync 2 gives `RolledBack`. A stop-bit error alone doesn't hold the answer back: when unsure, `Assumed` (at worst the Flipper holds a clone of the GBA's Pokemon and has lost its own offer, which can be made again) is safer than `RolledBack` (at worst the GBA's traded Pokemon lost on both sides).
 - A pending trade is cancelled on a 0x1122-session link loss unless that session's 5FFF close was answered.
 - Only a filed GBA block restarts the 6-burst reply delay. An incomplete block is dropped after 6 silent bursts. The 6 idle bursts between rounds 2–5 stay as a margin that pokeruby doesn't need.
 
