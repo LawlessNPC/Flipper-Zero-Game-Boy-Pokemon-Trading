@@ -1233,3 +1233,44 @@ README section:
 | Gen I/II unchanged | Global Constraints, 12 step 3, 14 step 3 |
 | Fake Ruby faithful to Part B (rounds/T1, 20-byte blocks, CCDD rule, 0x1144, ABCD/DCBA, 3 syncs and the save window, EEBB, re-sit, 0x1111 check, 300-frame timeouts) | 3–8 |
 | Hardware checklist, README, changelog; no `fap_version` bump | 12–14 |
+
+## Amendments made during execution
+
+The tasks above are kept as written. The controller's rulings amended them while they ran; this is a summary, and the code is the reference.
+
+**Size, ISR and stack**
+- **New Task 0 (R1):** the move and item names and their sorted-id lists moved from flash to the SD bulk asset (`gen3_bulk.bin` format v2), which saved about 11 KB. The letter lists now read the SD card (checklist E.2a times them).
+- **Size budget:** `text + data` ≤ 112,000 for both builds, and dev ≤ 108,500 at every plan 3 commit. This replaces "+16,000 over the Task 1 baseline, ≤ 128,000". Measure the build directories (`~/.ufbt/build/pokemon_d.elf` and the dev SDK's), not `dist/`, which both builds write.
+- **Final figures** (Task 14): release 87,624 and dev 97,580. That is +480 and +2,024 since plan 3 started (87,144 / 95,556), and +11,592 and +12,976 since Task 0 (76,032 / 84,604).
+- **ISR (R2):** the decrypt scratch and the round-block buffer are `Gen3Club` fields, never locals. A `gen3_club_frame` call copies at most 600 B (not 220) and decrypts at most once. The deepest chain from `mlink_hw_isr`, plus 16 B for the TIM2 dispatch, must be ≤ 600 B by `-fstack-usage`. Task 14 measured 432 B in release (the AABB path down to `gen3_pkm_decrypt`) and 392 B in dev, the same as Task 11. With SysTick (72 B) beneath it and a 32-B exception frame, that is about 536 B of the 1,024-B ISR stack.
+- **App ↔ ISR:** each PRIMASK section copies at most 104 B (one Pokemon plus scalars), not 100. `Gen3ClubStatus` is never a stack local; app code reads it through `gen3_menu_status`, which copies it into one static buffer.
+
+**Interfaces**
+- Plan 2's real names replaced the ones written here: `gen3_*_name_get`, the bool `gen3_edit_*` setters, `gen3_edit_load`, `Gen3ImportInfo`, and `tests/bulk_file.h`.
+- `Gen3ClubConfig` gained `trading`; every initializer names all five fields.
+- `gen3_menu_editor_ready` is exported (R3), so `Trade`, `Edit Pokemon` and `Load .pk3` open the bulk file and create the editor before the tick runs.
+
+**Editing and offers**
+- **Editing flag (O1):** opening `Edit Pokemon` or `Load .pk3` from the trade flow first sets the club's `editing` flag; the scene opens only if that works. While it is set, the offer is stale (EEBB), and the club never sits and never sends DDDD or CCDD. Setting it fails while a trade is pending. The tick clears it after publishing the new offer. One editing visit therefore costs one EEBB and one re-sit, and an edit is never lost to a trade.
+- **Late sit (R5):** if the GBA sits before the Flipper has a valid offer, the Flipper sits as soon as it has one, and the trade screen says why it waits.
+- **A received Pokemon the editor can't take (O2):** the offer is unpublished and the reason shown. A transient failure (the bulk file unreadable) is retried; a permanent one is not. The traded-away Pokemon is never offered again, also across session restarts.
+- **Refusals:** plan 2 strips Mail on every load, so the bad-offer tests and checklist H use an ENIGMA BERRY in a committed fixture, `docs/gen3/fixtures/enigma-berry.pk3` (R7). D8's item ranges stand (O3).
+- **An empty party (R8):** pokeruby shows Ruby accepts a partner party of 0; only a DDDD to it breaks Ruby. The Flipper never sends DDDD when it showed no Pokemon (DDEE instead).
+- **Received stats:** Ruby changes EVs without recalculating stats, and `gen3_normalise` recalculates them, so a received Pokemon can come back with different bytes. The tick picks it up and publishes it on the first tick after the trade; if that comes after the post-save round 1, the club falls back to one EEBB and a re-sit.
+- **Own link type (D2):** 0x1133 when not trading; 0x1144 mirrored only while a trade is pending; 0x1111 only after the Flipper's EEBB.
+
+**Save safety**
+- `Assumed` needs the sync-2 answer to have reached the GBA: a burst with no timeout, framing or checksum error, and an empty queue. Otherwise a link loss after sync 2 gives `RolledBack`.
+- A pending trade is cancelled on a 0x1122-session link loss unless that session's 5FFF close was answered.
+- Only a filed GBA block restarts the 6-burst reply delay. An incomplete block is dropped after 6 silent bursts. The 6 idle bursts between rounds 2–5 stay as a margin that pokeruby doesn't need.
+
+**Ending (R6, D1, D9, D10)**
+- "Stop link?" is never offered in the save window, nor with a trade pending while the GBA is linked. A relink's gap counts as linked (`Gen3ClubStatus.relinking`). Leaving stays possible while no GBA is linked, because Ruby writes nothing before sync 1.
+- `left` is not set for a close that reopens for a relink; a 300-frame timeout covers a GBA that never relinks. `left` can come with a trade still pending, and the UI never reads it as "trade resolved".
+- No stop frees the club before the sync has every received Pokemon. With a pickup waiting for the SD card, `End trade` offers `Retry` or `End anyway`.
+- Every dialog button decides again from a fresh status when pressed.
+- Task 14: the trade screen reads a relink's gap as linked too (`Linking...`), so `Go to the Cable Club` no longer flashes up for about 20 frames at each relink.
+
+**Docs and the hardware gate**
+- `docs/gen3/hardware-test-2.md` has sections A–K. Section J became the OT row, so memory is K, followed by the results table, what to report on failure, and hints for reading the log.
+- **Hardware gate: pending with the user.** By the user's ruling ("finish everything first"), Task 14 prepared the checklists (`hardware-test-1.md`, `editor-test.md`, `hardware-test-2.md`), the README and changelog, and the final size and stack figures, but did not run the gate. Step 5 (hand-off, then fixes for any failed section) waits until the user tests on hardware after the remaining plans are built.
