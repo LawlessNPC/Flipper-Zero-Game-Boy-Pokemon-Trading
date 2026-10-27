@@ -679,3 +679,50 @@ Exact values:
 | Gen I/II unchanged | Global Constraints, 7, 8 |
 | Phase 1 as v3.0: `fap_version`, description, changelog, README Gen III section | 7 |
 | Combined FireRed checklist; final gate listing every hardware run | 6, 7, 8 |
+
+## Amendments made during execution
+
+The tasks above are kept as written. Decisions taken while they ran amended them; this is a summary, and the code is the reference. Plan 3's rules (its Amendments, R5–R8 and O1–O3) carried over unchanged unless a line below says otherwise.
+
+**Size, ISR and stack**
+- **Size budget:** `text + data` ≤ 112,000 for both builds (not 128,000), and dev ≤ the Task 1 baseline + 4,000 = 101,716 at every commit. Measure the build directories (`~/.ufbt/build/pokemon_d.elf` and the dev SDK's), not `dist/`, which both builds write.
+- **Final figures** (Task 7): release 88,724 and dev 98,888. That is +1,012 and +1,172 since the Task 1 baseline (87,712 / 97,716, plan 3's final figures), and leaves dev 2,828 under the gate.
+- **ISR:** plan 3's bounds stand, not this plan's "220 bytes": a `gen3_club_frame` call copies at most 600 B and decrypts at most once (the GBA's AABB). The ISR-reachable additions are pure and flash-only: `gen3_link_game`, `gen3_partner_rules`, `gen3_link_player_progress` and `gen3_link_player_set_progress`, `gen3_trainer_card_build_frlg`, `gen3_partner_refuse`, and `gen3_offer_traits`, which runs on the decrypt scratch the AABB check has already filled, so it adds no decrypt.
+- **App ↔ ISR:** each PRIMASK section copies at most 104 B and never decrypts or `memcmp`s. `gen3_session_set_offer_traits` copies 102 B: the offer, `has_offer` and the traits byte. `gen3_club.c` decrypts nowhere but on the AABB path.
+- **Stack** (Task 7, `-fstack-usage`, plus 16 B for the TIM2 dispatch; budget 600 B): the deepest chain is 432 B in release (the AABB path down to `gen3_pkm_decrypt`, the same as plan 3) and 400 B in dev. The GBA-block path through `gen3_trainer_card_build_frlg` is 400 / 360 B, and the round start 392 / 320 B. With SysTick (72 B) and a 32-B exception frame beneath it, the ISR stack peaks at about 536 B of 1,024 in release (504 B in dev).
+
+**Interfaces**
+- Plans 2 and 3's real names replaced the ones written here, and the tests use the bench's own helpers: `bench_to_room` (the plan's `reach_room` re-inits a Ruby Link Test bench), the bench's `club_cfg` and `club_cfg_trade` for every `Gen3ClubConfig`, and `tm_make_unfateful` built on `tm_make_pkm`.
+- `gen3_club_set_offer_traits(club, game, trades_seen, traits)` hands the club an offer with its traits. `gen3_club_set_offer` stays for tests and passes unknown traits, which are never usable with an FRLG partner. `gen3_session_set_offer_traits` replaces `gen3_session_set_offer`, which is gone.
+- `Gen3ClubStatus` appends `partner_rules`, `offer_traits` and `offer_usable` after `relinking`. `GEN3_FRLG_PROGRESS_NATIONAL_DEX_MASK` (0x0F) is public, beside `GEN3_FRLG_PROGRESS_NATIONAL_DEX`.
+- Plan 3's `Gen3Refuse` sweeps in `test_gen3_trade_sync.c` had to change for the two new values; the sweep's guide-call count grew to match.
+
+**The claim and the partner's rules**
+- The claim follows the GBA's game for every link type, the Link Test and another room included. A partner with no block yet, or after a bad block, reads as Unknown and gets plan 3's Ruby claim.
+- The partner rules come from every GBA LinkPlayerBlock that parses, before the club answers it. They start as `{Unknown, true}` and outlive relinks, session resets and disconnects; a cartridge swap updates them at the new GBA's first block.
+- Round delays are chosen per game at the GBA's 0x1122 block: 16 / 12 bursts for FRLG, plan 3's 10 / 6 otherwise. An explicit `gen3_club_set_round_delays` (tests only) fixes them until the next `gen3_club_init`.
+
+**Offers the partner can't take**
+- **An unusable offer counts as no offer.** The club doesn't sit with it, and round 1 sends an empty party (zeros) instead of the Pokemon the GBA last saw, as D3 had it. pokefirered shows that FRLG accepts an empty partner party, as Ruby does, so the GBA never sees the Pokemon, and the club never sends DDDD to it. A late sit works with FRLG as with Ruby: once the offer becomes usable, a seated GBA gets the trade menu.
+- **The traits are computed on the app thread.** The sync computes them from the editor's Pokemon, never in the club. A traded-in Pokemon's traits come from the AABB check's decrypt and apply when the trade ends `Done` or `Assumed`.
+- **The sync keeps plan 3's O2:** a valid offer still needs a clean pickup, so a traded-away Pokemon is never offered again. The partner refusal is computed only for a valid offer. The offer is still published while the partner refuses it; the club decides.
+- **`offer_stale` tests `!offer_usable` in place of `!has_offer`, and adds `left`.** With `left`, the menu after a late 0x1144 relink's save never starts a second trade: the GBA gets EEBB and goes back to a room where the Flipper no longer sits.
+- **The FRLG guide rows** come after the pickup rows and before plan 3's `Can't offer it` rows, with no "stay seated" variant. They show only while a GBA is linked (not Waiting, or relinking), so the previous game's rule doesn't show while the user walks another one to the counter. For under 1 s after a cartridge swap, the previous game's row can still show until the new GBA's first block arrives; this is accepted.
+- **`left` with a GBA linked** shows `Walk out on the GBA, then unplug.` instead of `Link ended. You can unplug the GBA.`, since unplugging then would give the GBA a link error.
+- **`gen3_edit_set_fateful`** keeps `pristine` when no byte changes (plan 3's R4) and is in the fuzz test, which also cross-checks the offer traits after every step.
+
+**The fake's FRLG mode**
+- It checks a trainer card's `stars` (at most 4) in both modes, which closed a gap in plan 3's Ruby mode; the version byte at 0x38 is checked in FRLG mode only. It writes its own `name[8..10]`.
+- Its LastMon rule in FRLG mode has no HP test (`fr: trade.c: CanTradeSelectedMon`). FireRed's check of its own Pokemon's HP on YES (`PLAYER_MON_INVALID`) isn't modelled: with all the GBA's other Pokemon fainted, the fake sends BBBB where FireRed sends BBCC. The club can't influence this; it is accepted.
+- The 0x1144 deadline counts every frame in `fr: trade_scene.c: CB2_LinkTrade` state 4, the stricter reading. A boundary test shows it doesn't trip early: the relink lands up to about 361 frames after FireRed's OpenLink and trips at 363. On the bench the club relinks in about 24 frames.
+- The FRLG trade, link save and room return needed no change to `gen3_club.c`.
+- The trade-run helpers shared by the Ruby and FRLG suites live in `tests/club_bench.h`.
+
+**Docs**
+- `docs/gen3/link-protocol-trade.md` §C4: FRLG waits 11 frames before each `CCCC` on master and child alike, and its round-1 `CCCC` needs G0 + 4, one frame more than Ruby.
+- Plan 3's sync-2 comment is corrected in its code, test and Amendments: an `Assumed` misreport clones the GBA's Pokemon and loses only the Flipper's offer, which can be made again.
+- Comments state their reasons, cite pokefirered as `fr: file: Function`, and cite this plan's decisions as "plan 4 D3" or in words.
+- The README merges the three Gen III sections into `## Gen III (Game Boy Advance)`. It says no game is tested on hardware until the gate passes. The v3.0 changelog keeps the bulk-asset bullet.
+- `docs/gen3/hardware-test-frlg.md` has sections A–J (J is memory), then the results table, what to report on failure, and hints for reading the log. `docs/gen3/hardware-test-1.md` points to it for FireRed.
+
+**Hardware gate (Task 8): pending with the user.** By the user's decision ("finish everything first"), the gate waits until plans 2–5 and the follow-ups are built. Task 7 prepared the checklists, the README and changelog, and the final size and stack figures. The gate runs, in order: `docs/gen3/hardware-test-1.md` (all steps), `docs/gen3/editor-test.md` A–F (F is memory), `docs/gen3/hardware-test-2.md` A–K (J is the OT row, K memory), `docs/gen3/hardware-test-frlg.md` A–J, and the Gen I/II smoke test, `editor-test.md` A.13. On a full pass, the README's Games line becomes "Tested on genuine Ruby and FireRed. Emerald is untested.", with LeafGreen added if it was tested.
