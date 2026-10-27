@@ -1,5 +1,14 @@
 # Changelog - Patch Notes
 
+## Version 3.0
+**New Features**
+- Gen III (Game Boy Advance, non-Japanese): Cable Club trades with Ruby, Sapphire, FireRed and LeafGreen, one Pokemon at a time and back again without leaving the Trade Center
+- Gen III Pokemon editor: species, nickname, level, held item, moves, IVs/EVs, nature, ability, shiny, gender, Pokerus, Poke Ball, OT name/TID/SID, Unown form, fateful flag for Mew/Deoxys
+- Load and save Gen III Pokemon as PKHeX `.pk3` files
+- `files/gen3_bulk.bin` (species, move and item names, and learnsets) ships as an app asset; if the editor says `Data missing`, delete `apps_assets/pokemon` on the SD card and reopen
+- Gen III Link Test with a link log, and the SD pin on the Pinout screen
+- Hardware checklists in `docs/gen3/`
+
 ## Version 2.3
 - Fix potential bug in copying incoming trade data to the live working struct
 

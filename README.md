@@ -16,12 +16,15 @@ The video below trades a Bulbasaur from the Flipper to a Game Boy Color with Pok
   - [Trade](#trade-pkmn)
     - [Modifying Traded Pokemon](#modifying-traded-pokemon)
     - [Reset Trade Connection State](#reset-trade-connection-state)
+- [Gen III (Game Boy Advance)](#gen-iii-game-boy-advance)
 - [How it Works / Build your own Interface](#how-does-it-work)
 
 
 ## Introduction
 
 This is a Pokemon exchange application from Flipper Zero to Game Boy supporting Generation I and II games; Red, Blue, Yellow, Gold, Silver, and Crystal (all non-Japanese regions[^JPN]). It allows trading Pokemon to and from a Game Boy; allowing for customization and/or modification of Pokemon.
+
+Version 3.0 adds [Generation III](#gen-iii-game-boy-advance): Ruby, Sapphire, FireRed and LeafGreen (non-Japanese).
 
 [^JPN]: Japanese releases of all Generation I and II games use a different data layout, this application implements the data layout used in all other global regions. Attempting to trade between a Japanese cartridge and the Flipper [risks corrupting or erasing save data](https://web.archive.org/web/20221009111851/http://www.nintendo.com/consumer/systems/gameboy/trouble_specificgame.jsp#erasing)
 
@@ -390,6 +393,96 @@ Once a connection has been established between the Flipper and a Pokemon game, t
 Version 2.0 of the Pokemon Trade tool fixes a bug on MALVEKE boards that are Rev. 2.5 or lower where after a trade is completed the `OK` button no longer functions. However, while on the trade screen the `OK` button will continue to not function. For example, if you try to press the `OK` button to turn the backlight on, the Flipper will not respond. The `OK` button functionality will be restored once the Flipper leaves the Trade screen.
 
 
+## Gen III (Game Boy Advance)
+The main menu's `Gen III  (GBA non-JPN)` entry is for the Game Boy Advance games. Its menu has `Trade`, `Edit Pokemon`, `Load .pk3`, `Save .pk3`, `National Dex: Off`, and `Link Test` (`End trade` while trading).
+
+### Games
+English Ruby, Sapphire, FireRed and LeafGreen. Not yet tested on hardware: the checklists in `docs/gen3/` (see [Link Test, log and checklists](#link-test-log-and-checklists)) are the test. Emerald is untested.
+
+The Flipper links as a player of the game it meets: with FireRed or LeafGreen, as a player of that game (a FireRed/LeafGreen avatar and a Kanto-style trainer card); with Ruby or Sapphire, as a Ruby player.
+
+### Cable
+Plug one end of the GBA link cable into the Flipper's module first, with the other end free, then open `Trade` or `Link Test`. The Link Test shows `Cable: plug in/swap ends`, and the trade screen `Plug in the cable (or swap its ends).`, until the right plug is in the Flipper. A missing and a reversed cable look the same, so if it stays, put the cable's other plug into the Flipper instead. Once the cable reads right (`Cable: OK` in the Link Test), plug the other end into the GBA. Note which plug works for you. The cable check stays live: if it fails while linked, the Flipper pauses its transfers.
+
+The GBA link also uses the SD pin, which the [Pinout](#pinout) screen shows.
+
+### Trading
+The Flipper trades as the other player at the Cable Club Trade Center table. Its party is one Pokemon, the one in `Edit Pokemon`. The Pokemon it gets back becomes the editor's, so you can change it and trade it back, as often as you like, without leaving the Trade Center.
+
+How to trade:
+
+1. On the Flipper, choose `Gen III  (GBA non-JPN)` → `Trade`. The trade screen says what is happening and what to do on the GBA, and its last line, `Flipper: <NICKNAME>`, is the Pokemon on offer.
+2. Plug in the cable as in [Cable](#cable), the Flipper's end first.
+3. On the GBA, go to the Pokemon Center 2F and talk to the Trade Center attendant. In Ruby and Sapphire that is the middle one (the right-hand one is the Record Corner); in FireRed and LeafGreen, talk to the right-hand one and choose TRADE CENTER. Let the game save. The trade screen says `Go to the Cable Club: PC 2F, Trade Center: RS middle, FRLG right` until the GBA links.
+4. In the Trade Center, sit at the table. The Flipper sits too, and the trade menu opens with the Flipper's Pokemon on the right.
+5. Choose one of yours → TRADE → YES. The Flipper accepts every trade by itself. The GBA then saves: don't unplug or turn off either side until its trade menu is back.
+6. Your Pokemon is now on the Flipper's side, in `Edit Pokemon` and on offer. Pick the next trade on the GBA, or edit it first. The Flipper recalculates a received Pokemon's stats, as it does for a loaded file. If that changes the Pokemon after the GBA has already reopened its trade menu, the GBA goes back to the room once, and you sit again.
+
+**Save what you receive.** A Pokemon the Flipper receives lives only in the editor, in the Flipper's memory, until you `Save .pk3` it. Exiting the app loses it, so save it if you want to keep it.
+
+The link keeps running behind every Gen III screen: the editor, its keyboards and lists, the species picker, and `.pk3` load and save. `Trade` in the Gen III menu returns to the trade screen. While the link runs, the Gen III menu shows `End trade` in place of `Link Test`.
+
+**Edit between trades.** Press OK (`Edit`) on the trade screen, or open `Edit Pokemon` or `Load .pk3` from the Gen III menu. If the GBA is in the trade menu, it goes back to the room, with your avatar still on its seat. If you already chose TRADE on the GBA, the Flipper has answered within about 0.2 s and the GBA asks "Is this trade okay?"; it waits there for your answer, and goes back to the room once you answer YES while the Flipper's editor is open (no trade starts). If you close the editor before answering without a change, YES trades exactly the Pokemon the GBA showed. So an edit is never lost to a trade, and the GBA never gets a Pokemon you are still changing. When you are done, go back to the trade screen and sit again: step off the seat and back on (Up, then Down). The trade menu opens with the new Pokemon. If you sit while the Flipper is still editing, the Flipper joins as soon as you are back on the trade screen (or the Gen III menu). During a trade, from YES until the GBA has saved, `Edit` is hidden, and `Edit Pokemon` and `Load .pk3` show the trade screen instead. They do the same while a Pokemon you received waits for the SD card (`Can't take the traded Pokemon: data file unreadable. Retrying.`). If the GBA ever shows a link error while you use the Flipper, walk out of the Trade Center before editing and back in afterwards. The trade screen waits at `Go to the Cable Club` meanwhile.
+
+**Original trainer.** Once the GBA has linked, the Flipper knows the GBA player's name, TID and SID. The default Pokemon, if you haven't changed it, and every species you pick from then on take that player as their OT, so the Pokemon obeys them and counts as their own. Any other Pokemon, such as a loaded one, keeps its OT. For it, `Edit Pokemon` shows a row `OT: use <NAME>` after `OT SID`, which gives it the player's OT and keeps it shiny where it can. If it can't, a `Shiny lost` notice says so. Like any edit, this recalculates the stats, so a hurt loaded Pokemon comes back with full HP. The Flipper remembers the last GBA player until the app exits, also after `End trade`. Before any GBA has linked, the OT stays as it is: `FLIPPER`, TID `22222` for the default Pokemon. On the link, the Flipper itself is always `FLIPPER`, TID `22222`.
+
+**Another cartridge.** To trade with another game in the same session, walk out of the Trade Center on the GBA (don't use `End trade`), wait for `Go to the Cable Club`, then turn the GBA off and change the cartridge. The Flipper follows the game that is linked now. For a moment while the new game links, the trade screen may still show the previous game's `Can't offer it` reason.
+
+**Saving and ending.**
+
+- While the GBA saves after a trade, the trade screen says `The GBA is saving. Don't unplug or turn off. Back is locked.`, Back does nothing there, and `End trade` only shows `The GBA is saving`. If the link breaks during the save anyway, the trade screen says whether the GBA kept its old save (the Flipper then keeps its Pokemon too) or likely finished the trade (the Flipper takes the GBA's Pokemon; check the GBA's party), also when you chose `End trade` during that trade. If it breaks after YES but before the trade animation, the trade screen says `Link lost before the trade. On a GBA link error, restart it.` or, in two short windows, `Link lost. Nothing was traded.`: the GBA hasn't traded or saved yet. FireRed and LeafGreen show a link error if that link takes them too long; restart the GBA and enter the Trade Center again.
+- `End trade` in the Gen III menu asks `End trade?`; `End` makes the GBA's player walk out of the Trade Center by itself. From the trade menu, the GBA goes back to the room first; during a trade, it waits until the save is done. Then the trade screen shows `Link ended. You can unplug the GBA.`, and `Link Test` is back in the menu. Back on the Gen III menu asks the same while a GBA is linked. With no GBA linked (the trade screen says `Go to the Cable Club`), both end the trade at once.
+- If the GBA doesn't walk out after `End`, Back on the trade screen offers `Stop link?`. The GBA may then show a link error and need a restart; it saved before linking, so nothing is lost.
+- If a received Pokemon couldn't be loaded because the SD card can't be read, `End trade` first offers `Retry` (put the card back in) or `End anyway`, which loses that Pokemon.
+
+### What the Flipper won't offer or take
+- It doesn't take an Egg, a Bad Egg or a Pokemon holding Mail. The trade screen says `Can't take that one: <why>. Pick another one.`, and the GBA cancels that trade.
+- It doesn't offer, to any game, a Pokemon holding Mail, the ENIGMA BERRY, or an item Ruby doesn't have (from FireRed, LeafGreen or Emerald). The editor never gives a Pokemon one of these, and loading a file removes Mail, so only a loaded `.pk3` holding such an item gets here. The trade screen says `Can't offer it: it holds a bad item. Edit it first.`, and the Flipper doesn't sit until it has a Pokemon it can offer; if you are already seated, it joins you then. [`docs/gen3/fixtures/enigma-berry.pk3`](docs/gen3/fixtures/enigma-berry.pk3), a TREECKO holding the ENIGMA BERRY, shows this.
+- With FireRed or LeafGreen, it also doesn't offer:
+  - A Pokemon from #152 up while that game has no National Dex. FireRed and LeafGreen themselves trade away only #1–151 then, and the Flipper keeps to the same rule. The trade screen says `Can't offer it: GBA has no National Dex. Get it, or pick 1-151`: get it in that game first, or trade one from #1–151.
+  - A Mew or Deoxys unless the editor shows `Fateful: Yes` (see [Editor](#editor)); FireRed and LeafGreen refuse it otherwise. The trade screen says `Can't offer it: FRLG needs Fateful: Yes on Mew/Deoxys: edit it.`
+
+  The Flipper learns these rules from the game's link, so the reason shows once the GBA is in the Trade Center or on its way in. Here too the Flipper doesn't sit until it has a Pokemon the game can take (the GBA's "Please wait. … … B Button: Cancel" stays), and if you are already seated, it joins you then.
+
+### National Dex option
+`National Dex: Off` in the Gen III menu is the default each time the app starts. It is for Ruby and Sapphire only; FireRed and LeafGreen ignore it. Choosing it asks `Unlock National Dex?`; with `Turn on`, the item reads `National Dex: On`, and the next trade with Ruby or Sapphire unlocks that game's National Dex for good on that save. Choosing `National Dex: On` turns it off again for the following trades, but a save that has traded with it on keeps its National Dex.
+
+### Editor
+`Edit Pokemon` can change:
+
+- Pokemon (all 386 species; species 252-386 show a `?` image instead of a sprite)
+- Nickname
+- Level
+- IV/EV preset (Max EV means 85 per stat, 510 in total)
+- Nature
+- Ability (only for species with two abilities)
+- Shininess (for some OT IDs, some Unown nature and letter pairs can't be shiny; the editor says so)
+- Gender
+- Unown form
+- Poke ball
+- Fateful, for Mew and Deoxys only, right after `Ball`: OK switches between `Fateful: Yes` and `Fateful: No`. FireRed and LeafGreen trade a Mew or Deoxys only with `Yes`. Picking the species sets it; a loaded `.pk3`, or a Mew or Deoxys from a Ruby trade, can come without it.
+- Held item
+- Moves
+- Pokerus
+- OT name, OT TID and OT SID (and `OT: use <NAME>` once a GBA has linked for a trade, see [Trading](#trading))
+
+The species, move and item names and the learnsets are in `files/gen3_bulk.bin`, which ships inside the `.fap` as an asset and is unpacked to `apps_assets/pokemon/` on the SD card. If the editor says `Data missing`, delete the `apps_assets/pokemon` folder on the SD card and reopen the app.
+
+### .pk3 files
+Files are PKHeX `.pk3` files in `apps_data/pokemon/gen3/` on the SD card. `Save .pk3` writes 80 bytes; `Load .pk3` reads 80 or 100 bytes. A loaded file is checked and tidied so the Pokemon is valid in game (stats recalculated, duplicate moves and move gaps removed, a held Mail item and any mail index removed), and the result says what was fixed.
+
+### Link Test, log and checklists
+`Link Test` checks the link without trading: the Flipper acts as the other player in the game's Cable Club Trade Center, and shows the cable, the link's state, and the GBA player's name and TID. Plug in the cable as in [Cable](#cable).
+
+The link is logged to `apps_data/pokemon/gen3_link.log` on the SD card. The log is overwritten each time a trade or Link Test link starts, so after a problem copy it off the SD card before you start another one.
+
+The hardware checklists:
+
+- [Link Test with Ruby](docs/gen3/hardware-test-1.md)
+- [Editor and `.pk3` files](docs/gen3/editor-test.md)
+- [Trading with Ruby](docs/gen3/hardware-test-2.md)
+- [FireRed: Link Test, trading, editor, `.pk3` files and a cartridge swap](docs/gen3/hardware-test-frlg.md)
+
 ## How Does it Work?
 
 The method used to communicate 2 Game Boys is based on the SPI protocol, which is a very simple serial communication protocol in which a master device communicates with one or more slave devices. The protocol is bidirectional and synchronous, and uses three basic signals:
@@ -481,10 +574,13 @@ To generate the graphical interface, the [**FUI-Editor**](https://ilin.pt/stuff/
 The sprites for each Pokemon were hand-made for the monochrome screen of the Flipper. The source models are based on sprites from a selection of all Gen I and Gen II games; the ones used we're our favorites. Huge thanks to [ProteanReverie](https://github.com/ProteanReverie) for all of the help and support!
 
 ##  Tested In
+The Gen I/II trade, with a Game Boy or Game Boy Color game running on:
 - Game Boy Color (GBC)
 - Game Boy Advance (GBA)
 - Game Boy Advance SP (GBA SP)
 - Analogue Pocket
+
+The Gen III features (the Game Boy Advance games) are not yet tested on hardware; see [Games](#games).
 
 ## Contributors
 [![Contributors](https://contrib.rocks/image?repo=KBEmbedded/Flipper-Zero-Game-Boy-Pokemon-Trading)](https://github.com/KBEmbedded/Flipper-Zero-Game-Boy-Pokemon-Trading/graphs/contributors)
