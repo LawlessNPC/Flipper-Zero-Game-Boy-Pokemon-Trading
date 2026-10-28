@@ -1801,3 +1801,61 @@ README section "Gen III (experimental): cartridge save access" covers:
 | Gen I/II untouched | Global Constraints, 15 |
 | Host-testable core | 2–10 |
 | Phase 2 ships as 3.x | 15 |
+
+## Amendments made during execution
+
+The tasks above are kept as written. Decisions taken while they ran amended them; this is a summary, and the code is the reference. Plan 4's rules for comments, builds, commits, stack and the ISR carried over unchanged unless a line below says otherwise.
+
+**A second app**
+- **Why.** The plan's code didn't fit beside plans 1–4 in one FAP: a FAP loads into RAM whole, both builds must stay at or under 112,000 B of `text + data`, and plan 4 had already reached about 89 / 99 KB. Cartridge is therefore a second FAP, appid `pokemon_cart` (Pokemon Cartridge), a second `App` in the same `application.fam`. It compiles its own explicit file list: its shell `cart/pokemon_cart_app.c`, the Gen III editor scenes, the pure editor stack, the link driver and this plan's modules. The main FAP excludes `cart/` and the Cartridge scenes; it still compiles this plan's pure modules but never links them, which `nm` checks on both builds of each FAP confirm.
+- **Launch.** The Gen III menu's `Cartridge` item shows only while no trade session runs, as `Link Test` does. It ends a stopped session, finds `pokemon_cart.fap` beside the running app's own `.fap` (else in `apps/GPIO/`), queues it with `loader_enqueue_launch`, and exits; Pokemon Cartridge returns to the app list when it exits. If the file is missing, an `App missing` dialog says where to copy it, and the main app stays. Launching closes the main app's editor, so the README and the checklist say to `Save .pk3` first.
+- **One define.** `POKEMON_CART_APP`, set for the cart only, picks the cart's own scene table (in `pokemon_scene.h`, which `pokemon_scene.c` follows), the cart's `Data missing` text, and the shared `.pk3` folder in `gen3_pk3_dir`. `pokemon_scene.h` also names both scene tables in an `#if 0` block, code-neutral, so SCons rebuilds when either table changes. The Gen III menu's dialog and editor helpers moved to `pokemon_gen3_common.c`, which both FAPs compile, unchanged in behaviour. The cart's hub is registered as `Gen3Menu`, because the editor scenes search back to it; leaving the cart stops its scene manager instead of searching back.
+- **Data.** The cart keeps its backups, ROM copies and working copy in the main app's `apps_data/pokemon/gen3/`, by absolute path, and loads `.pk3` files from there; its log is `apps_data/pokemon/gen3_cart.log`. Both FAPs ship `files/` (the bulk asset, the sprites and the helper image) as their own assets. At each start the cart copies the main app's two pin files into its own data folder, so the pins are set in the main app only.
+- **The editor is the cart's own,** not a saved and restored copy of the main app's (plan 5 D10). Its trainer is the save's after each Connect, `Back up again` and Restore that is Ok, so `New Pokemon` gets the OT of the save on the cart.
+
+**Size**
+- **Gates.** Each FAP's `text + data`, read from the build directories' ELFs (not `dist/`, which both builds write), is at most 112,000 B in both builds. The main FAP is at most its size at the start of this plan plus 1,000 B: release 89,896 and dev 100,096, against a start of 88,896 / 99,096. This replaces "+24,000 over BASE" for one FAP.
+- **Final figures:** main 89,456 release and 99,728 dev (+560 and +632, from the stream mode and the launcher); cart 69,988 release and 78,140 dev.
+- **The helper's cap** is 12,288 B (`GEN3_MB_MAX_LEN`, with one copy on the helper's side in its Makefile, checked equal by a host test), not 8,192, and there is no 6 KB target. The flash and hash routines stay in IWRAM as ARM code. The final image is 7,776 B. It builds byte for byte the same with the release and dev ufbt toolchains (`make -C gba/helper check`), and the Makefile pins the compiler version. The session buffer is the image's size, at least 4,096 B.
+
+**ISR and stack**
+- The ISR rules apply to both FAPs. In the cart, everything the frame callback `gen3_cart_frame` reaches (the multiboot sender and the packet pump, with their CRC steps) is pure, allocation-free and loop-free over a payload, and the callback calls its two cores directly, never through a pointer, so the stack script can follow it.
+- **Final chains** (`-fstack-usage`, plus 16 B for the TIM2 dispatch; budget 600 B): main 432 B release and 400 B dev, as at the end of plan 4; cart 188 B release (through the pump) and 140 B dev. With SysTick (72 B) and a 32-B exception frame beneath, the 1,024-B ISR stack peaks at about 536 / 504 B in the main FAP and 292 / 244 B in the cart.
+- No stack local over 128 B anywhere in app code; the worker's jobs keep at most 256 B of locals each. The session status is never a scene's stack local: scenes read it through one static copy.
+
+**Multiboot**
+- Detect and Palette poll back to back, one word per tick, as a hardware-proven sender does; only Final's `0x0065` retries wait one GBA frame. The first Detect reply after a wait is stale by construction and is skipped. A palette wait that saw only valid busy replies restarts without counting. Up to 255 junk replies are drained between waits. A 20 s budget for all attempts ends in a request to power-cycle the GBA, the documented fallback. A host test pins the committed image's logo bytes.
+- The cart log records each upload's restarts (counted and all), the GBA's two handshake bytes, the palette's busy count and the time from the first `0x0065` to `0x0075`, for the hardware check of these budgets.
+
+**The helper's own safety**
+- The helper picks the slot the game loads with the game's exact section sizes, keyed by the header's game code; an unknown code can't arm. Only English codes can be armed.
+- It skips an erase only for a sector this session erased successfully and hasn't programmed since; arming, `HELLO`, and any program or commit to the sector clear that, so a sector a power cut left half erased is erased again. A commit needs the sector to have been programmed, deferred, in this arming. A write without a deferred commit byte is refused, and `CART_INFO` disarms.
+- The two accepted flash IDs, `0x09C2` and `0x1362`, are explicit in the helper and in the Flipper's write check. German Sapphire's own revision-0 ID passes the chip check and is refused by region.
+- Duplicates are answered from memory only when CRC, sequence number and command all match, and the client rejects a response whose sequence number isn't its request's.
+
+**The job layer**
+- After a lost link or a timeout, the client reconnects, retrying for the lost command's busy budget plus 3 s. Any reconnect during a write is an unknown outcome: the footers, and then a CRC of each sector in the slot being written, decide whether the write is done; otherwise it is redone in full. A commit's result is never answered by retrying the commit. Jobs branch on each call's result, never on the last status.
+- **Attach and reconnect share one footer check.** While a write isn't yet backed up, its slot may hold only the backup's sectors, unsigned ones, or the write's counter; anything else means the cart changed, which drops the backup. Discard ends the write's claim on its slot. So a write cut by a power cut finishes on its next run, and a game save there is never written over unseen.
+- A cart whose save can't be read (an SRAM or non-flash repro, or not a Pokemon game) connects with no backup: Cart info says why, and Copy ROM is offered; browsing, writing and restoring all need a readable save.
+- **Before arming,** a CRC of each sector of the slot the game loads is compared with the backup, so a change that keeps the footers is caught before anything is erased.
+- **Restore** zeroes the padding past each section's size in every sector it uploads. It needs the cart to be writable by identification, not its save: an empty or corrupt save may be restored over. A save the game loads that is padded or not strict can't be restored over, and the hub hides `Restore backup` then.
+- **The padded-slot refusal.** A save whose bytes past a section's size aren't zero (another tool wrote it) passes the game's own check but not the helper's full-length one, so the Flipper doesn't offer to write it: `Writing off: Save not recognised`, until the game saves once.
+- **The sweeps** cut the link at explicit points through all 14 commits, with a Retry mid-commit, and cut the power through the whole write, including the check and the backup after it, with half-erased sectors and half-programmed bytes modelled.
+
+**Pokemon in the save**
+- An opened Pokemon is compared, when the editor closes, against its bytes as the editor normalised them on opening, so only a real edit is staged; a Pokemon opened and closed unchanged is never written.
+- If opening or making a Pokemon fails (the editor's load, or `gen3_cart_new_mon`, which now returns a bool), nothing is staged, and the editor's previous Pokemon is never written into a slot.
+- The trade's offer check runs before every put, with Ruby's item table as the bound, and when a Pokemon is opened. A party Pokemon holding Mail isn't opened ("Take the Mail off in the game first"), since its letter is a record of its own.
+- A Pokemon whose species changed gets the cart's game as its met game before it is put, so a FireRed cart's new Pokemon isn't "met in Ruby".
+
+**Screens**
+- Text breaks only at `\n`: body lines at most 21 characters, dialog headers at most 16, at most 4 lines under a header with buttons (5 without), and 3 on a result screen. The plan's longer texts were wrapped or shortened keeping their meaning, and host tests check each table of texts.
+- A job stopped with Back gets a neutral header (`Backup stopped`, not `… failed`). The power-on hint shows only before the sender's first failure. A link lost after the commits says the cart may load either save. `Writing off` shows the cart's reason, or the save's when it is why, including on an empty or corrupt save. `Discard changes` needs a current backup. `Restore backup?` names both trainers and, with edits pending, the edits it drops. `Resume copy?`'s Restart asks a second time before it removes the partial copy.
+
+**Docs and release**
+- The README's `### Cartridge (save access)` covers the second app and its installation, the connect, backups, editing, writing, which cartridges may be written, restore, Copy ROM, the log and the helper's build. It states writing as allowed for English Ruby, Sapphire, FireRed and LeafGreen and says it is not yet tested on hardware. The changelog's 3.1 entry points to the checklist; both apps are version 3.1.
+- `docs/gen3/hardware-test-3.md` has sections A–G with Ruby, H (FireRed), R (regression, including `Cartridge` hidden during a trade), M (memory in both apps), the results table, what to report, and a table for reading the log.
+- **Releasing:** if `files/gen3_helper.mb` differs from the last release's, bump `HP_BUILD_ID` before the release; development builds stay at 1, which 3.1 ships.
+- **Final checks:** 33 host suites, 762 tests, all passing; both builds of both FAPs with no warnings; `lib/flipper-gblink`, the Gen I/II files, `src/pokemon_app.c` and the main scene table unchanged; the driver's diff is the stream mode alone.
+
+**Hardware gate: pending with the user.** By the user's decision ("finish everything first"), the gate waits until plans 2–5 and the follow-ups are built. It runs `docs/gen3/hardware-test-3.md` A–H, R and M with both `.fap` files from the final release build, after plan 4's gate. If a free heap reads under 4,000 B, or an app won't start, the numbers are reported; for the main app the fallback is plan 2's D2 (more tables to the SD asset), as a follow-up. On a failure, the cart log is read against the checklist's table, and only the failed sections are run again after a fix. On a full pass, the README's Cartridge section can say which games it was tested with.
