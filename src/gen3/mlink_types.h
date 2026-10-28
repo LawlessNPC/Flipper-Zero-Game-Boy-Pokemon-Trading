@@ -10,7 +10,7 @@
 #define MLINK_NO_DATA   0xFFFFu
 
 typedef struct {
-    uint8_t count; /* 1 (handshake) or 9 (burst) */
+    uint8_t count; /* frame mode 1..9; stream mode 0..9, 0 = idle tick (no transfer) */
     uint16_t word[MLINK_BURST_LEN];
 } MlinkTx;
 
@@ -20,3 +20,22 @@ typedef struct {
     uint16_t timeout_mask; /* bit t: no start bit seen in transfer t */
     uint16_t framing_mask; /* bit t: stop bit low in transfer t */
 } MlinkRx;
+
+/* Frame: frames start at the GBA frame rate (the Cable Club link). Stream: a frame starts on the
+ * tick after the previous frame's callback, and count 0 is an idle tick (multiboot and the helper
+ * protocol). */
+typedef enum { MlinkModeFrame, MlinkModeStream } MlinkMode;
+
+/* One tick, start to start (mlink_hw_furi.c MLINK_TICK_DECI_US / 10). */
+#define MLINK_TICK_US 1073u
+/* Frame mode: the mean period, frame start to frame start; each real frame is 15 or 16 ticks. */
+#define MLINK_FRAME_US 16740u
+
+/* Time one frame takes, for protocol timeouts. Stream: max(count, 1) ticks.
+ * Frame: MLINK_FRAME_US. One exception in stream mode: a frame the cable guard skips lasts one
+ * tick but reports count timed-out words, so with the cable out, timeouts measured this way run
+ * up to MLINK_BURST_LEN times fast. They only ever fail early. */
+static inline uint32_t mlink_frame_us(MlinkMode mode, uint8_t count) {
+    if(mode == MlinkModeFrame) return MLINK_FRAME_US;
+    return (count ? count : 1u) * MLINK_TICK_US;
+}

@@ -143,18 +143,18 @@ protocol table specialised to child 1 (`x = y = 0x02`), with afska's checks.
 
 | # | P sends | P expects | Repeat / on failure |
 |---|---|---|---|
-| 1 | `0x6200` | `0xFFFF` (no start bit: slave not in MultiPlay yet), then `0x0000` | repeat, 1 per frame, until step 2 |
-| 2 | `0x6200` | `0x7202`: `(r & 0xFFF0) == 0x7200` and `(r & 0xF) == 0x2` | up to 16 tries (afska `DETECTION_TRIES = 16`; GBATEK "Repeat 15 times"); else wait 1/16 s and restart at 1 |
+| 1 | `0x6200` | `0xFFFF` (no start bit: slave not in MultiPlay yet), then `0x0000` | repeat back to back, 1 per tick, until step 2. The first unmarked reply after starting, or after a restart wait, answers a word sent before it: ignore it. A marked reply (timed out, framing) doesn't count as that one |
+| 2 | `0x6200` | `0x7202`: `(r & 0xFFF0) == 0x7200` and `(r & 0xF) == 0x2` | after 255 replies that are neither `0x0000`, `0xFFFF` nor `0x7202`, wait 70–240 ms and restart at 1, not counted as a failure (GBATEK "Repeat 15 times" and afska `DETECTION_TRIES = 16` pause sooner, for no stated reason; §2.6) |
 | 3 | `0x6102` (`0x6100 \| client_bit`) | `0x7202` | else restart |
 | 4 | header halfword k, k = 0..0x5F, little-endian `hdr[2k] \| hdr[2k+1] << 8` | `((0x60 - k) << 8) \| 0x02`, so `0x6002` … `0x0102` | any mismatch: restart |
 | 5 | `0x6200` | `0x0002` | else restart |
 | 6 | `0x6202` | `0x7202` | else restart |
-| 7 | `0x6300 \| pp` (palette, e.g. `0x6393`) | `0x7202` while the slave is busy, then `0x73cc`: `(r & 0xFF00) == 0x7300`, `cc = r & 0xFF` | up to 16 tries, else restart |
+| 7 | `0x6300 \| pp` (palette, e.g. `0x6393`) | `0x7202` while the slave is busy, then `0x73cc`: `(r & 0xFF00) == 0x7300`, `cc = r & 0xFF` | back to back, 1 per tick, for up to 4 s (GBATEK sets no limit; afska gives up after 16 tries); then restart. Not counted as a failure if every reply was a valid `0x7202` |
 | 8 | `0x6400 \| hh`, `hh = (0x11 + cc + 0xFF + 0xFF) & 0xFF` (absent children count as 0xFF), using the `cc` of the last `0x73cc` reply **(inferred, M19)** | `(r & 0xFF00) == 0x7300` (`0x73uu`, ignore uu) | else restart |
 | 9 | — | wait ≥ 1/16 s (GBATEK "DELAY Wait 1/16 seconds at master side"; afska waits 4 frames). Use 100 ms **(inferred, M20)** | |
 | 10 | `llll = (file_size - 0x190) / 4` (= L/4 − 0x34) | `0x73rr`, `rr = r & 0xFF` | `(r & 0xFF00) != 0x7300`: restart |
 | 11 | encrypted payload, 2 halfwords per 32-bit word (§2.3), L/2 transfers | halfword k (byte offset `0xC0 + 2k`): `r == (0xC0 + 2k) & 0xFFFF`, so `0x00C0, 0x00C2, …` | any mismatch: restart |
-| 12 | `0x0065` | anything first (`nnnn`), then `0x0074` while the slave computes the CRC, then `0x0075` | repeat until `0x0075`, 1 per frame, ≤ 5 s (afska `MAX_FINAL_HANDSHAKE_ATTEMPS = FPS * 5`) |
+| 12 | `0x0065` | anything first (`nnnn`), then `0x0074` while the slave computes the CRC, then `0x0075` | repeat until `0x0075`, once per GBA frame with idle ticks between, ≤ 5 s (afska `MAX_FINAL_HANDSHAKE_ATTEMPS = FPS * 5`) |
 | 13 | `0x0066` | `0x0075` | |
 | 14 | `crc` (16 bits, §2.3) | `r == crc` (the slave's own CRC) | mismatch: transfer failed; restart |
 | — | done: the BIOS jumps to 0x020000C0 | | |
@@ -164,6 +164,14 @@ protocol table specialised to child 1 (`x = y = 0x02`), with afska's checks.
   speed 0–3), or `0xF1 + color*2` for a fixed palette (GBATEK SWI 25h). afska's
   default `0b10010011` = `0x93` is fine.
 - Do not send `0xFFFF` as a command word. The handshake words never are.
+- Steps 1, 2 and 7 poll back to back, one transfer per tick, as afska's
+  `LinkCableMultiboot` does (each try right after the previous reply). Only
+  step 12's retries are spaced, once per GBA frame, as afska's are (once per
+  VBlank).
+- "Restart" is a failure that counts, except where the table says otherwise:
+  after the fourth one the sender gives up (§2.6).
+- One attempt, from the first header word, has 20 s in all, restarts included.
+  Past that the sender gives up and asks for a power cycle (§2.6).
 
 ## 2.3 Encryption, seed and CRC
 
@@ -214,34 +222,47 @@ header = 0xC0 zero bytes; payload = bytes `00 01 02 … FF` (L = 0x100, file
 
 ```c
 #define CB 0x02u /* client bit, child 1 */
-/* xfer(): one transfer, returns slot 1 (MLINK_NO_DATA + timeout bit if no start bit). */
+/* xfer(): one transfer, returns slot 1 (MLINK_NO_DATA + timeout bit if no start bit);
+ * marked(r): that transfer's timeout or framing bit is set. */
 
 bool mb_send(const uint8_t* img, uint32_t len /* 0x1C0..0x40000, len % 16 == 0 */) {
     uint16_t r;
-    int tries;
+    int junk, fails = 0;
+    goto detect;
+fail:                                       /* a counted failure */
+    if(++fails > 3) return false;           /* ask for a power cycle */
 restart:
     wait_ms(70 + rand_ms(0, 170));          /* afska: 4 + random(1..10) frames */
-    for(tries = 0;; tries++) {              /* steps 1-2: 1 transfer per frame */
+detect:
+    do r = xfer(0x6200); while(marked(r));  /* its reply answers an earlier word: ignore it */
+    for(junk = 0;;) {                       /* steps 1-2: back to back, 1 per tick */
         r = xfer(0x6200);
         if((r & 0xFFF0) == 0x7200 && (r & 0xF) == CB) break;
-        if(r != 0xFFFF && r != 0x0000 && tries >= 16) goto restart;
+        if(r != 0xFFFF && r != 0x0000 && ++junk >= 255) goto restart; /* not counted */
     }
-    if(xfer(0x6100 | CB) != (0x7200 | CB)) goto restart;
+    /* From here on, every xfer() also checks the attempt clock, started by the first header
+     * word ever sent: past 20 s, return false (ask for a power cycle). */
+    if(xfer(0x6100 | CB) != (0x7200 | CB)) goto fail;
     for(int k = 0; k < 0x60; k++)            /* step 4: may run 9 per frame */
-        if(xfer(img[2*k] | img[2*k+1] << 8) != (((0x60 - k) << 8) | CB)) goto restart;
-    if(xfer(0x6200) != CB) goto restart;
-    if(xfer(0x6200 | CB) != (0x7200 | CB)) goto restart;
+        if(xfer(img[2*k] | img[2*k+1] << 8) != (((0x60 - k) << 8) | CB)) goto fail;
+    if(xfer(0x6200) != CB) goto fail;
+    if(xfer(0x6200 | CB) != (0x7200 | CB)) goto fail;
     uint8_t pp = 0x93, cc;
-    for(tries = 0;; tries++) {              /* step 7: 1 per frame */
+    bool other = false;
+    for(uint32_t t0 = now_ms();;) {         /* step 7: back to back, 1 per tick */
         r = xfer(0x6300 | pp);
         if((r & 0xFF00) == 0x7300) { cc = r & 0xFF; break; }
-        if(tries >= 16) goto restart;
+        if(r != (0x7200 | CB)) other = true;
+        if(now_ms() - t0 >= 4000) {
+            if(other) goto fail;
+            goto restart;                   /* only 0x7202: a slow slave, not counted */
+        }
     }
     uint8_t hh = (uint8_t)(0x11 + cc + 0xFF + 0xFF);
-    if((xfer(0x6400 | hh) & 0xFF00) != 0x7300) goto restart;
+    if((xfer(0x6400 | hh) & 0xFF00) != 0x7300) goto fail;
     wait_ms(100);
     r = xfer((uint16_t)((len - 0x190) / 4));
-    if((r & 0xFF00) != 0x7300) goto restart;
+    if((r & 0xFF00) != 0x7300) goto fail;
     uint8_t rr = r & 0xFF;
     uint32_t m = pp | (uint32_t)cc << 8 | 0xFFFF0000u;
     uint32_t f = hh | (uint32_t)rr << 8 | 0xFFFF0000u;
@@ -251,14 +272,17 @@ restart:
         c = crc32step(c, w);
         m = m * 0x6F646573u + 1u;
         uint32_t e = w ^ (0xFE000000u - ptr) ^ m ^ 0x6465646Fu;
-        if(xfer(e & 0xFFFF) != (ptr & 0xFFFF)) goto restart;
-        if(xfer(e >> 16) != ((ptr + 2) & 0xFFFF)) goto restart;
+        if(xfer(e & 0xFFFF) != (ptr & 0xFFFF)) goto fail;
+        if(xfer(e >> 16) != ((ptr + 2) & 0xFFFF)) goto fail;
     }
     c = crc32step(c, f);
-    for(tries = 0; xfer(0x0065) != 0x0075; tries++)  /* 1 per frame */
-        if(tries > 300) goto restart;
+    for(uint32_t t0 = now_ms(); xfer(0x0065) != 0x0075;) {  /* 1 per GBA frame */
+        if(now_ms() - t0 >= 5000) goto fail;
+        wait_frame();
+    }
     xfer(0x0066);
-    return xfer((uint16_t)c) == (uint16_t)c;     /* false: restart, or ask for a power cycle */
+    if(xfer((uint16_t)c) != (uint16_t)c) goto fail;
+    return true;
 }
 ```
 
@@ -279,9 +303,11 @@ transfers per frame, one frame of reaction latency):
 | Minimum gap after each transfer | "wait for Start bit cleared … followed by a 36us delay" | GBATEK "Multiboot Communication" |
 | Our gap inside a frame | ≈ 751.5 µs (TIM2 tick 1073 µs start to start) | `mlink_hw_furi.c` header comment |
 | Our gap between frames | 16.74 − 9 × 1.073 ≈ 7.1 ms | same |
-| Detection retry | 16 tries, then wait 1/16 s | GBATEK; afska |
+| Detection | back to back, 1 per tick; after 255 other replies, a 70–240 ms wait (GBATEK: 15 tries, then 1/16 s; afska: 16 tries) | `gen3_mb.c`; GBATEK; afska |
+| Palette (step 7) | back to back, 1 per tick, ≤ 4 s | `gen3_mb.c`; afska gives up after 16 tries |
 | Before the length word | ≥ 1/16 s | GBATEK |
 | Waiting for `0x0075` | afska polls once per frame for ≤ 5 s | afska |
+| One whole attempt | 20 s from the first header word, restarts included; then ask for a power cycle | `gen3_mb.c` (§2.6) |
 | Maximum gap the BIOS tolerates | not documented. afska's async master leaves a whole frame between transfers in several states, so multi-millisecond gaps work **(inferred, M3)** | — |
 
 Time to send the helper: ≈ 113 + L/2 transfers (detection, header, palette,
@@ -294,18 +320,35 @@ in frame mode (≈ 0.25 s):
 | 8 KB | ≈ 8.0 s | ≈ 4.6 s |
 | 16 KB | ≈ 15.6 s | ≈ 9.0 s |
 
-Keep the helper ≤ 8 KB.
+The sender takes images up to 12 KB (`GEN3_MB_MAX_LEN`, 0x3000).
 
 ## 2.6 Failure behaviour
 
 - Detection fails (no `7202`): wrong plug, GBA not held at Start+Select, or GBA
-  off. Retry forever with the 1/16 s back-off. Show "power on the GBA holding
+  off. Retry forever, back to back, with a 70–240 ms wait after every 255
+  replies that are neither `0x0000`, `0xFFFF` nor `0x7202`. None of this counts
+  as a failure, and waiting for the GBA before the first header word doesn't
+  count against the attempt budget either. Show "power on the GBA holding
   Start+Select" after ~3 s.
+- **The junk limit.** After a glitch, the slave is still mid-transfer: it
+  answers each `0x6200` with its own header count or data offset until it has
+  had every word it expects. GBATEK's "Repeat 15 times, if failed: delay 1/16s
+  and restart" and afska's 16 tries give no reason for the pause, and document
+  no slave timeout, so the sender lets it drain at one word per tick and pauses
+  only every 255 replies.
 - Header, address or CRC mismatch: restart at step 1 after the random delay
   (afska `startMultibootSend`). How the slave BIOS behaves after a bad CRC or a
   bad header (logo, `0x96`, complement) is not documented. Expect it to go back
-  to waiting, and fall back to asking the user to power-cycle with Start+Select
-  after 3 failures **(inferred, M4)**.
+  to waiting. The fourth counted failure ends the attempt, and the user is asked
+  to power-cycle with Start+Select **(inferred, M4)**.
+- **A slow palette step isn't a failure.** A 4 s palette wait whose every reply
+  was a valid `0x7202` restarts without counting.
+- **The attempt budget.** One attempt, from the first header word, has 20 s in
+  all, restarts and waits included. A slave left mid-transfer by a glitch can
+  take minutes to drain, while turning the GBA off and on takes seconds. Past
+  20 s the sender stops with a power-cycle request (`Gen3MbFailPowerCycle`). A
+  clean 12 KB send takes about 16 s even with a slow slave (palette and `0x0075`
+  waits near their limits), so the budget never cuts a normal run.
 - SWI 25h's own result is "r0 0=okay, 1=failed" (GBATEK). The slave only starts
   the program when the CRCs match.
 
@@ -368,7 +411,9 @@ Scan the ROM in 32-bit steps for `0x53414C46` ("FLAS") followed by `0x5F4D3148`
 ("H1M_"), for "SRAM" (`0x4D415253`) followed by a byte `0x5F`, and for "EEPR"
 (`0x52504545`) followed by "OM_" (FIX94 `libSave.c: SaveSize`). A Pokemon ROM
 that contains `SRAM_` or `EEPROM_` and no `FLASH1M_V103` has been patched
-(§3.6). A scan of 16 MiB at WAITCNT 0x4317 takes ~1–3 s **(inferred, M7)**.
+(§3.6). A scan of 16 MiB at WAITCNT 0x4317 takes ~6.7 s: the helper's loop costs ~27 cycles
+per 32-bit word by its disassembly, one HAL ROM read (~12 cycles, 6 of them the cart bus) plus
+the test and the loop **(inferred, M7)**. ~7.2 s at the fallback WAITCNT 0x0003.
 
 Step 2, the SRAM probe. **Run it before any flash command.** A command sequence
 writes 0xAA/0x55/0x90 straight into an SRAM and corrupts it.
@@ -775,10 +820,10 @@ static int wait(volatile uint8_t* a, uint8_t want, uint16_t ms, uint16_t phase) 
     }
 }
 int erase_sector(unsigned n) {                       /* n = 0..31 */
-    bank(n >> 4);
     volatile uint8_t* a = F + ((n & 15) << 12);
     int r;
     for(int t = 0; t < 5; t++) {                     /* EraseFlashSector_MX */
+        bank(n >> 4);  /* every try: pret selects it once, but nothing should depend on F0 keeping it */
         cmd(0x80); F[0x5555] = 0xAA; F[0x2AAA] = 0x55; *a = 0x30;
         if(!((r = wait(a, 0xFF, 2000, 2)) & 0xA000)) break;
     }
@@ -904,7 +949,10 @@ else: gSaveCounter = 0; first = 0; result 2 (CORRUPT)
 Then `sub_81258BC` (em: `CopySaveSlotData`) loads **slot `gSaveCounter % 2`**:
 for each physical sector of that slot it copies data to chunk `id` when the
 signature and checksum are good. It sets `gFirstSaveSector` (em:
-`gLastWrittenSector`) to the physical index `i` holding id 0.
+`gLastWrittenSector`) to the physical index `i` of the last sector whose footer
+says id 0, valid or not. It runs after every status: for EMPTY and CORRUPT
+`gSaveCounter` is 0, so it reads slot A, and `first` ends up as slot A's last
+id-0 footer, not the 0 set above.
 
 Consequences:
 
@@ -1131,23 +1179,42 @@ the word after the false `SOF`.
 | Code | Name | Args | Response payload | Notes |
 |---|---|---|---|---|
 | 0x01 | `HELLO` | — | proto version (1), helper build id, max payload words, `[0x020000C4] \| [0x020000C5] << 8` (boot mode 3, slave id 1) | |
-| 0x02 | `CART_INFO` | — | 96 words cart header; flags (logo == own header, `0x96` ok, complement ok); ROM size (2 words, §3.7); save-library string kind and offset | |
+| 0x02 | `CART_INFO` | — | 96 words cart header; flags (logo == own header, `0x96` ok, complement ok); ROM size (2 words, §3.7); save-library string kind and offset | scans again each time, and ends any arming: the cart may not be the one the arming checked |
 | 0x03 | `SAVE_PROBE` | — | flash ID; class (0 = 128 KB MX-style, 1 = 64 KB, 2 = SRAM-like, 3 = none/unknown); `pre0, pre1`, ID bytes; SRAM-probe result | runs §3.3 once and caches the result; later calls return the cache |
-| 0x04 | `ARM_WRITE` | magic `0x5752`, expected flash ID, target slot T, active counter N (2 words) | status | H re-reads the footers: slot 1−T must hold 14 sectors with valid signature, full-length checksum (§5.3), counter N, N % 2 = 1−T. Otherwise `REFUSED`. Arms writes for the 14 sectors of slot T only |
-| 0x05 | `DISARM` | — | status | also automatic after the 14th `COMMIT_SECTOR`, any flash error, or `HELLO` |
+| 0x04 | `ARM_WRITE` | magic `0x5752`, expected flash ID, target slot T, mode, active counter N (2 words) | status | First ends any arming and clears `erased_ok` (below), whatever the outcome. A wrong magic, T > 1 or mode > 1 is `BAD_ARG`; an expected ID other than the probed one is `REFUSED`. H re-reads the slots. Which slot the game loads is §5.5 exactly as the game runs it, with the game's own section sizes (§5.4) from the cart header's code (`AXV`/`AXP` Ruby/Sapphire, `BPR`/`BPG` FireRed/LeafGreen). Mode 0 (a write): the game must load slot 1−T, and slot 1−T must also be a clean save: 14 sectors with valid signature, full-length checksum (§5.3, so the bytes past each section are zero), ids 0–13 once each, one counter N, N % 2 = 1−T. Mode 1 (a restore onto an empty or corrupt save): the game must load neither slot, and neither may be a clean save. Otherwise `REFUSED`. A slot the game takes is never written, whatever its padding. Arms writes for the 14 sectors of slot T only |
+| 0x05 | `DISARM` | — | status | also automatic once all 14 sectors of slot T are completed (below), on any flash error, `HELLO`, `CART_INFO`, and every `ARM_WRITE` |
 | 0x10 | `READ_SECTOR` | sector 0..31 | 2048 words | |
 | 0x11 | `READ_FOOTERS` | — | 32 × 8 words: bytes 0xFF4..0xFFF (6 words), full-length checksum (1 word), 0 | ≈ 260 transfers; enough for §5.5 except the exact-size check |
 | 0x12 | `SECTOR_CRC32` | sector | 2 words | read-back verify without re-reading over the link |
 | 0x18 | `ERASE_SECTOR` | sector | status, fail code | armed and in slot T only |
-| 0x19 | `WRITE_SECTOR` | sector, flags (bit 0 `DEFER_COMMIT`), 2048 words image | status, fail code, fail offset | the CRC must pass **before** any flash access. If not blank: erase. Program in ascending order (skipping 0xFF8 if deferred), then verify |
-| 0x1A | `COPY_SECTOR` | src sector, dst sector, flags, new counter (2 words) | status, fail code, fail offset | H reads src into RAM, patches the counter at 0xFFC, then proceeds as `WRITE_SECTOR` |
-| 0x1B | `COMMIT_SECTOR` | sector | status | programs 0xFF8 = `0x25` only if it reads `0xFF` and 0xFF9..0xFFB read `20 01 08`; then verifies 0xFF8..0xFFB = `0x08012025` |
-| 0x20 | `ROM_READ` | address (2), words (≤ 2048) | data | address within 0x08000000..0x09FFFFFF |
-| 0x21 | `ROM_SHA1` | address (2), length (2) | 10 words | `H_BUSY` while hashing |
-| 0x22 | `ROM_CRC32` | address (2), length (2) | 2 words | faster than SHA-1 |
+| 0x19 | `WRITE_SECTOR` | sector, flags (`DEFER_COMMIT` = 1, required: any other value is `BAD_ARG`), 2048 words image | status, fail code, fail offset | the CRC must pass **before** any flash access. Erase first, unless this session erased the sector OK and nothing has programmed it since (the session's `erased_ok` mask: a successful erase sets the sector's bit; any program or commit to it clears it; so do start-up and `HELLO`). A sector that merely reads all 0xFF is erased again: an erase cut short by a power loss can leave cells that read 0xFF but aren't fully erased. Program in ascending order, skipping 0xFF8, then verify. Up to 3 tries; a failed try erases again. OK marks the sector **programmed** in this arming |
+| 0x1A | `COPY_SECTOR` | src sector, dst sector, flags (as `WRITE_SECTOR`), new counter (2 words) | status, fail code, fail offset | src must be in slot 1−T (else `BAD_ARG`). H reads src into RAM, patches the counter at 0xFFC, then proceeds as `WRITE_SECTOR` |
+| 0x1B | `COMMIT_SECTOR` | sector | status | only a sector programmed in this arming and not erased or written since (else `REFUSED`); programs 0xFF8 = `0x25` only if it reads `0xFF` and 0xFF9..0xFFB read `20 01 08`; then verifies 0xFF8..0xFFB = `0x08012025` |
+| 0x20 | `ROM_READ` | address (2), words (1..2048) | data | the whole range within 0x08000000..0x09FFFFFF, address even |
+| 0x21 | `ROM_SHA1` | address (2), length (2) | 10 words | `H_BUSY` while hashing. Not implemented by the helper |
+| 0x22 | `ROM_CRC32` | address (2), length (2: 2..0x40000, even) | 2 words | faster than SHA-1; the same range rule as `ROM_READ` |
 
-All write-class commands (0x18–0x1B) also refuse sectors 28–31, and refuse
-everything when §3.6 checks 1–4 failed.
+The flash reads (0x10–0x12) answer `UNSUPPORTED` unless `SAVE_PROBE` ran and
+found a 128 KB flash: on an SRAM the bank command would land as data.
+
+All write-class commands (`ARM_WRITE`, 0x18–0x1B) refuse everything when §3.6
+checks 1–4 failed: `CART_INFO` must have run and found the logo, `0x96`, the
+complement, one of `AXVE AXPE BPRE BPGE`, `FLASH1M_V` and no other library
+string, and the code must name a save layout the helper knows; `SAVE_PROBE`
+must have found a 128 KB flash with ID `0x09C2` or `0x1362` (never `0xD4BF`,
+which only German Sapphire version 0 takes as 128 KB, and which is never
+written). 0x18–0x1B also refuse sectors 28–31; then `NOT_ARMED`, or `REFUSED`
+for a sector outside slot T.
+
+A sector is **completed** when `COMMIT_SECTOR` gives it its valid signature;
+writes never program the signature's first byte themselves. A commit is
+refused unless this arming programmed that sector, and while another sector of
+slot T holds a valid signature it didn't get in the current arming (`REFUSED`,
+fail offset = that sector). Images left in slot T by an earlier arming (a link
+drop, a power cut) are therefore never committed. Slot T can become a valid
+slot, and the game's choice (§5.5), only as a whole save programmed and
+committed by the current arming, and the helper disarms at that moment. The
+§5.8 order (erase all 14, program all 14 deferred, commit all 14) always passes.
 
 ## 6.4 Status codes
 
@@ -1164,17 +1231,33 @@ everything when §3.6 checks 1–4 failed.
 | 0x08 | `VERIFY_FAIL` (+ offset) |
 | 0x09 | `NOT_ERASED` (commit byte already programmed) |
 
+`REFUSED`'s fail code tells which check refused, for the log: 1 the cart, 2 the
+chip, 3 `ARM_WRITE`'s flash ID, 4 the slots, 5 a sector outside slot T, 6 another
+sector of slot T still valid, 7 a commit of a sector this arming didn't program,
+8 a game code with no known save layout (§6.3).
+
 ## 6.5 Busy, retries, duplicates
 
-- Each new command gets the next `seq` (8 bits). H keeps the last `seq` and the
-  status of the last write-class command. A repeated `seq` of a write-class
-  command returns the stored status **without executing again**. Reads simply
-  re-execute.
+- Each new command gets the next `seq` (8 bits). H remembers the `seq`, the
+  code and the packet CRC-32 (which covers w1, `n` and every argument) of the
+  last packet it executed, and its response. A packet right after it with the
+  same `seq`, code and CRC, whose command is write-class (`ARM_WRITE`,
+  0x18–0x1B), gets that response again **without executing again**. Any other
+  valid packet replaces the
+  memory, so a `seq` that wraps can never alias; a packet with a bad CRC isn't
+  one and changes nothing. Reads simply re-execute.
 - P timeouts:
   - No `SOF` within 32 transfers after the request's last word, while H sends
     neither `H_BUSY` nor a packet: resend.
-  - `H_BUSY` longer than 6 s: give up, report a flash failure, keep the slot
-    analysis.
+  - `H_BUSY` longer than the command's budget: give up, report a flash failure,
+    keep the slot analysis. The budget is per command:
+    - `CART_INFO`: 20 s. Its whole-ROM scan takes ~6.7 s for 16 MiB and ~14.5 s
+      for 32 MiB (§3.3, M7), so a 32 MiB cart that isn't a Pokemon game still
+      gets its refusal instead of a link timeout.
+    - `ERASE_SECTOR`, `WRITE_SECTOR`, `COPY_SECTOR`: 12 s. Up to 5 erase tries
+      of up to 2.04 s each, then the program and the verify (§3.4).
+    - Every other command: 6 s. `ROM_CRC32` is limited to 0x40000 bytes per
+      call to stay under it.
   - 3 failed resends: reset the link (wait for `H_READY`, `HELLO`).
 - H receive timeout: abort a packet if no transfer arrives for 200 ms (TM3 ≥ 196).
 
@@ -1222,13 +1305,19 @@ Flipper's BLE/USB **(inferred, M18)**.
   finishes erase, program and verify (≤ ~0.5 s typical, ≤ 2.04 s per erase
   attempt worst case) whether or not the Flipper still clocks. It then waits,
   holding `H_BUSY` until the next transfer, and sends the result. A Flipper
-  that comes back re-sends the same `seq` and gets the stored status. **A link
-  drop therefore never leaves a half-written sector.** Only power loss or cart
-  removal during those windows can. The red backdrop (§4.8) tells the user not
-  to power off.
+  that comes back re-sends the same packet and gets the stored response
+  (§6.5). **A link drop therefore never leaves a half-written sector.** Only
+  power loss or cart removal during those windows can. The red backdrop (§4.8)
+  tells the user not to power off.
 - **Why a torn sector is still harmless:** the Flipper only ever writes slot T,
-  the slot the game does not load (§5.8). A new sector becomes valid only after
-  its commit byte, written after all 14 are programmed. The slot as a whole
+  the slot the game does not load (§5.8). Every write defers the commit byte
+  (`WRITE_SECTOR` and `COPY_SECTOR` refuse to do otherwise), so a sector's
+  signature can only become valid through `COMMIT_SECTOR`, after the whole
+  sector, its counter at 0xFFC included, is programmed and verified. A power cut
+  in the middle of programming never leaves a valid signature over a torn
+  counter. The helper commits only sectors the current arming programmed
+  (§6.3), so a reconnect can't complete images an interrupted write left
+  behind; the Flipper erases and programs them again. The slot as a whole
   becomes valid only when all 14 ids are committed. So at every instant the
   game's §5.5 choice is either the untouched old slot S or the complete new
   slot T. That is the same guarantee Ruby relies on: two alternating slots for
@@ -1256,7 +1345,7 @@ Flipper's BLE/USB **(inferred, M18)**.
 | M4 | Slave behaviour after a bad header, logo, `0x96`, complement or CRC (back to waiting, or a power cycle needed) | not documented. Test by sending a corrupted image |
 | M5 | Cart GPIO control reads 0 after power-on, so ROM reads at 0xC4–0xC9 return ROM data | GBATEK describes write-only mode; the power-on value is not stated |
 | M6 | Japanese RSE/FRLG save layouts differ; only English/German layouts are covered | pret covers US and German only |
-| M7 | ROM string scan takes ~1–3 s | estimate from waitstates; measure |
+| M7 | ROM string scan takes ~6.7 s (16 MiB, WAITCNT 0x4317) | cycle count of the helper's loop (~27 per word); measure on hardware |
 | M8 | A single stray write (not 0xAA) to 0x0E005555 is ignored by MX29L010/LE26FV10N1TS | JEDEC-style state machine behaviour; check against the datasheets or test on a genuine cart with a backup |
 | M9 | Part numbers of the 64 KB chips | GBATEK gives maker names only |
 | M10 | Typical sector erase / byte program times (we budget 0.1–0.5 s per sector) | only Nintendo's timeouts (10 ms, 2.04 s) are in the sources; measure on hardware |
